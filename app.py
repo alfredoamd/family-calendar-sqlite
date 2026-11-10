@@ -12,19 +12,29 @@ except ImportError:
     st.stop()
 
 # ==========================================
-# 1. SIMPLE PASSWORD PROTECTION
+# 1. FIXED PASSWORD PROTECTION (WITH MEMORY)
 # ==========================================
 def check_password():
-    if "password" not in st.session_state:
-        st.session_state.password = ""
-    if st.session_state.password == st.secrets["password"]:
+    # If the user has already successfully logged in during this session, let them pass
+    if st.session_state.get("password_correct", False):
         return True
+    
     st.title("👨‍👩‍👧‍👦 Family Calendar Chatbot & Optimizer")
-    st.text_input("Enter Family Password", type="password", key="password")
+    user_input = st.text_input("Enter Family Password", type="password")
+    
+    # Check if the entered password matches your Secret key
+    if user_input == st.secrets["password"]:
+        st.session_state["password_correct"] = True
+        st.rerun() # Refresh the page immediately to unlock the app
+        return True
+    elif user_input != "":
+        st.error("❌ Incorrect password, please try again.")
+        
     return False
 
 if not check_password():
     st.stop()
+
 
 # ==========================================
 # 2. SQLITE DATABASE INITIALIZATION
