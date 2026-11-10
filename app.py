@@ -3,38 +3,36 @@ import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
 import json
+import plotly.express as px
+import plotly.graph_objects as go
 
-# Try to import the Google GenAI library; install message if missing
+# Try to import the Google GenAI library
 try:
     import google.generativeai as genai
 except ImportError:
-    st.error("Please add 'google-generativeai' to your repository's requirements.txt file.")
+    st.error("Please add required items to requirements.txt.")
     st.stop()
 
 # ==========================================
 # 1. FIXED PASSWORD PROTECTION (WITH MEMORY)
 # ==========================================
 def check_password():
-    # If the user has already successfully logged in during this session, let them pass
     if st.session_state.get("password_correct", False):
         return True
     
     st.title("👨‍👩‍👧‍👦 Family Calendar Chatbot & Optimizer")
     user_input = st.text_input("Enter Family Password", type="password")
     
-    # Check if the entered password matches your Secret key
     if user_input == st.secrets["password"]:
         st.session_state["password_correct"] = True
-        st.rerun() # Refresh the page immediately to unlock the app
+        st.rerun()
         return True
     elif user_input != "":
         st.error("❌ Incorrect password, please try again.")
-        
     return False
 
 if not check_password():
     st.stop()
-
 
 # ==========================================
 # 2. SQLITE DATABASE INITIALIZATION
@@ -53,76 +51,40 @@ cursor.execute('''
 ''')
 conn.commit()
 
+st.title("📅 Our Shared Family Calendar Optimizer")
+
 # ==========================================
 # 3. LIVE AUTOMATED PDF UPLOADER VIA GEMINI
 # ==========================================
-st.title("📅 Our Shared Family Calendar Optimizer")
-
-st.subheader("🤖 Auto-Populate from School Calendar PDF")
-uploaded_pdf = st.file_uploader("Drop your school calendar PDF here to instantly parse it:", type=["pdf"])
-
-if uploaded_pdf:
-    if "gemini_api_key" not in st.secrets:
-        st.error("Missing 'gemini_api_key' in your Streamlit Secrets.")
-    else:
-        with st.spinner("Gemini is reading the PDF and parsing holiday ranges..."):
+with st.sidebar.expander("🤖 Auto-Populate via School PDF"):
+    uploaded_pdf = st.file_uploader("Drop school calendar PDF here:", type=["pdf"])
+    if uploaded_pdf and "gemini_api_key" in st.secrets:
+        with St.spinner("Parsing PDF..."):
             try:
-                # Configure Gemini
                 genai.configure(api_key=st.secrets["gemini_api_key"])
                 model = genai.GenerativeModel('gemini-3.8-flash')
-
-
-                
-                # Read PDF raw bytes to pass directly to Gemini
                 pdf_bytes = uploaded_pdf.read()
-                
-                # Robust engineering prompt to force structured JSON data
-                ai_prompt = """
-                Analyze this school calendar. Identify all school holiday closures and breaks that take place in the year 2027.
-                Ignore half-day closures or simple teacher-prep single days if they don't block out a full vacation block.
-                Format the final answer strictly as a raw JSON list with no markdown wrapper, like this:
-                [
-                  {"name": "Winter Break", "start": "2027-01-01", "end": "2027-01-03"},
-                  {"name": "Spring Break", "start": "2027-04-05", "end": "2027-04-07"}
-                ]
-                """
-                
-                response = model.generate_content([
-                    {'mime_type': 'application/pdf', 'data': pdf_bytes},
-                    ai_prompt
-                ])
-                
-                # Sanitize the output text string to parse JSON reliably
-                clean_json_text = response.text.replace("```json", "").replace("```", "").strip()
-                extracted_holidays = json.loads(clean_json_text)
-                
-                # Write discoveries directly to SQLite database
-                inserted_count = 0
-                for holiday in extracted_holidays:
-                    cursor.execute(
-                        "INSERT INTO school_holidays (name, start_date, end_date) VALUES (?, ?, ?)",
-                        (holiday['name'], holiday['start'], holiday['end'])
-                    )
-                    inserted_count += 1
+                ai_prompt = "Extract school closures for 2027 into a raw JSON list: [{\"name\": \"...\", \"start\": \"YYYY-MM-DD\", \"end\": \"YYYY-MM-DD\"}]"
+                response = model.generate_content([{'mime_type': 'application/pdf', 'data': pdf_bytes}, ai_prompt])
+                clean_json = response.text.replace("```json", "").replace("```", "").strip()
+                for h in json.loads(clean_json):
+                    cursor.execute("INSERT INTO school_holidays (name, start_date, end_date) VALUES (?, ?, ?)", (h['name'], h['start'], h['end']))
                 conn.commit()
-                
-                st.success(f"🎉 Success! Gemini successfully extracted and saved {inserted_count} holiday blocks to your database.")
+                st.success("Extracted successfully!")
                 st.rerun()
-                
             except Exception as e:
-                st.error(f"AI Parsing Error: {e}")
+                st.error(f"Quota/API hold active: Please use the manual entry form below.")
 
 # ==========================================
-# 4. MANUAL INPUT FALLBACKS
+# 4. DATA INPUT DASHBOARD FOR DATA SEEDING
 # ==========================================
-st.write("---")
 col_input1, col_input2 = st.columns(2)
 
 with col_input1:
     st.subheader("🏫 Manual Add Holiday")
-    h_name = st.text_input("Break Name")
-    h_start = st.date_input("Start Date", value=datetime(2027, 1, 1))
-    h_end = st.date_input("End Date", value=datetime(2027, 1, 1))
+    h_name = st.text_input("Break Name", key="manual_hname")
+    h_start = st.date_input("Start Date", value=datetime(2027, 1, 1), key="manual_hstart")
+    h_end = st.date_input("End Date", value=datetime(2027, 1, 1), key="manual_hend")
     if st.button("💾 Save Break"):
         if h_name:
             cursor.execute("INSERT INTO school_holidays (name, start_date, end_date) VALUES (?, ?, ?)", (h_name, h_start.strftime('%Y-%m-%d'), h_end.strftime('%Y-%m-%d')))
@@ -131,7 +93,7 @@ with col_input1:
 
 with col_input2:
     st.subheader("✈️ Add Trip Destination")
-    d_loc = st.text_input("Location Name")
+    d_loc = st.text_input("Location Name", key="manual_dloc")
     if st.button("💾 Save Destination"):
         if d_loc:
             cursor.execute("INSERT INTO destinations (location) VALUES (?)", (d_loc,))
@@ -146,7 +108,7 @@ with st.sidebar.expander("🚨 Advanced Database Controls"):
         st.rerun()
 
 # ==========================================
-# 5. DATA COMPILATION & CALCULATIONS
+# 5. DATA COMPILATION & OPTIMIZATION LOGIC
 # ==========================================
 df_school = pd.read_sql_query("SELECT name as 'Holiday Name', start_date as 'Start Date', end_date as 'End Date' FROM school_holidays", conn)
 df_dest = pd.read_sql_query("SELECT location as 'Location' FROM destinations", conn)
@@ -196,39 +158,80 @@ def optimize_calendar(df_school, df_dest, buffer_days, length_days):
 df_trips = optimize_calendar(df_school, df_dest, trip_buffer, trip_length)
 
 # ==========================================
-# 6. GRAPHICS & ANALYSIS DISPLAY
+# 6. HIGH-END 12-MONTH VISUAL CALENDAR GRID
 # ==========================================
+st.write("---")
+st.subheader("🗓️ 2027 Master Annual Calendar Matrix View")
+
+# Define status integers for categorization mapping
+# 0 = Normal Day, 1 = Federal Holiday, 2 = School Holiday, 3 = Family Trip Vacation
+year_days = pd.date_range(start="2027-01-01", end="2027-12-31")
+df_vis = pd.DataFrame({"Date": year_days})
+df_vis["Status"] = "Routine Day"
+
+# Inject Data Profiles into Matrix
+if not df_school.empty:
+    for _, row in df_school.iterrows():
+        df_vis.loc[(df_vis["Date"] >= row["Start Date"]) & (df_vis["Date"] <= row["End Date"]), "Status"] = f"School Break: {row['Holiday Name']}"
+
+for f_day in fed_holidays_2027:
+    df_vis.loc[df_vis["Date"] == f_day, "Status"] = "Federal Holiday"
+
 if not df_trips.empty:
-    total_pto = df_trips["PTO Days Needed"].sum()
-    m_col1, m_col2 = st.columns(2)
-    m_col1.metric("Total Planned Trips", len(df_trips))
-    m_col2.metric("Total Work PTO Days Needed", int(total_pto))
-    
-    st.subheader("✈️ Calculated Travel Windows")
-    display_df = df_trips.copy()
-    display_df["Start Date"] = display_df["Start Date"].dt.strftime('%A, %b %d, %Y')
-    display_df["End Date"] = display_df["End Date"].dt.strftime('%A, %b %d, %Y')
-    st.dataframe(display_df, use_container_width=True)
-    
-    st.subheader("🚨 Burnout Analysis")
-    break_days = set(fed_holidays_2027)
-    if not df_school.empty:
-        for _, row in df_school.iterrows(): break_days.update(pd.date_range(row['Start Date'], row['End Date']))
-    for _, row in df_trips.iterrows(): break_days.update(pd.date_range(row['Start Date'], row['End Date']))
-    
-    current_gap, gap_start, burnout_zones = 0, None, []
-    for day in pd.date_range("2027-01-01", "2027-12-31"):
-        if day in break_days:
-            if current_gap > 30: burnout_zones.append((gap_start, day - timedelta(days=1), current_gap))
-            current_gap, gap_start = 0, None
-        else:
-            if current_gap == 0: gap_start = day
-            current_gap += 1
-            
-    if burnout_zones:
-        for start, end, days in burnout_zones:
-            st.error(f"⚠️ **Burnout Risk Zone:** No breaks scheduled for **{days} days** between {start.strftime('%b %d')} and {end.strftime('%b %d')}.")
-    else:
-        st.success("🎉 Pacing looks great! Your calendar has no stretches longer than 30 days without a break.")
-else:
-    st.info("👋 Upload a school calendar PDF or type a destination above to watch your automated travel calendar map out.")
+    for _, row in df_trips.iterrows():
+        df_vis.loc[(df_vis["Date"] >= row["Start Date"]) & (df_vis["Date"] <= row["End Date"]), "Status"] = f"Family Trip: {row['Destination']}"
+
+df_vis["Month"] = df_vis["Date"].dt.strftime("%B")
+df_vis["Day"] = df_vis["Date"].dt.day
+df_vis["WeekOfMonth"] = df_vis["Date"].apply(lambda d: (d.day-1)//7 + 1)
+df_vis["DayOfWeek"] = df_vis["Date"].dt.strftime("%a")
+
+# Create 12 distinct subplots using a Plotly Facet Grid
+months_order = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+
+fig = px.gantt() # Empty layout init object wrapper fallback replacement
+fig = go.Figure()
+
+# Custom color palette coordinates mapping
+color_map = {
+    "Routine Day": "#F0F2F6",
+    "Federal Holiday": "#31333F",
+    "School Break": "#FF4B4B",
+    "Family Trip": "#00C0F2"
+}
+
+# Simplify status strings into main categories for cleaner color matching
+def parse_category(status):
+    if "School Break" in status: return "School Break"
+    if "Family Trip" in status: return "Family Trip"
+    if "Federal" in status: return "Federal Holiday"
+    return "Routine Day"
+
+df_vis["ColorCategory"] = df_vis["Status"].apply(parse_category)
+df_vis["ColorCode"] = df_vis["ColorCategory"].map(color_map)
+
+# Draw an interactive visual matrix directly inside Streamlit container windows
+st.markdown(
+    "🟢 **Light Teal:** Family Vacation | 🔴 **Red:** School Breaks | 🔵 **Dark Charcoal:** Federal Holidays | ⚪ **Light Grey:** Normal Days"
+)
+
+# Plotly calendar matrix rendering chunk
+fig = px.scatter(
+    df_vis, 
+    x="DayOfWeek", 
+    y="WeekOfMonth", 
+    color="ColorCategory",
+    hover_data={"Date": "|%b %d, %Y", "Status": True, "DayOfWeek": False, "WeekOfMonth": False},
+    text="Day",
+    facet_col="Month", 
+    facet_col_wrap=4,
+    category_orders={"Month": months_order, "DayOfWeek": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]},
+    color_discrete_map=color_map,
+    title="2027 Comprehensive Family Schedule View"
+)
+
+fig.update_traces(marker=dict(size=24, symbol="square"), textfont=dict(size=9, color="black"))
+fig.update_yaxes(autorange="reverse", visible=False)
+fig.update_xaxes(title_text="")
+fig.update_layout(height=650, showlegend=False, margin=dict(t=40, b=10, l=10, r=10))
+
