@@ -59,7 +59,8 @@ if uploaded_pdf:
             try:
                 # Configure Gemini
                 genai.configure(api_key=st.secrets["gemini_api_key"])
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.5-flash')
+
                 
                 # Read PDF raw bytes to pass directly to Gemini
                 pdf_bytes = uploaded_pdf.read()
